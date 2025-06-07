@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="canonical" href="https://simposiorevsalud.univsalud.online/ingreso" />
+  <meta property="og:url" content="https://simposiorevsalud.univsalud.online/ingreso" />
+  <title>Simposio internacional de revistas científicas de ciencias de la salud</title>
+</head>
+
+<body>
+  <h1>Ingreso</h1>
+  <section>
+    <form id="login-form" method="post">
+
+      <div class="form-group">
+        <label for="email-input">Correo electrónico:</label>
+        <input type="email" id="email-input" name="user_email" class="form-input" required minlength="5">
+      </div>
+      <div class="form-group">
+        <label for="password-input">Contraseña:</label>
+        <input type="password" id="password-input" name="user_password" class="form-input" required minlength="8">
+      </div>
+
+      <div>
+        <span id="message-span"></span>
+      </div>
+      <button type="submit" id="login-btn">Ingresar</button>
+    </form>
+  </section>
+
+  <script src="/ingreso/app.js"></script>
+</body>
+
+</html>

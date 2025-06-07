@@ -1,0 +1,53 @@
+spin_manifest_version = 2
+
+[application]
+name = "simposiorevsalud"
+version = "0.1.0"
+authors = ["alejo-c <4lejo.castrillon@gmail.com>"]
+description = ""
+
+[[trigger.http]]
+route = "/api/..."
+component = "simposiorevsalud"
+
+[[trigger.http]]
+route = "/registro"
+component = "ui"
+
+[[trigger.http]]
+route = "/ingreso"
+component = "ui"
+
+[[trigger.http]]
+route = "/perfil"
+component = "ui"
+
+[[trigger.http]]
+route = "/constancias"
+component = "ui"
+
+[[trigger.http]]
+route = "/admin/usuarios"
+component = "ui"
+
+[[trigger.http]]
+route = "/admin/registro"
+component = "ui"
+
+[[trigger.http]]
+route = "/..."
+component = "ui"
+
+[component.simposiorevsalud]
+sqlite_databases = ["default"]
+source = "target/wasm32-wasip1/release/simposiorevsalud.wasm"
+allowed_outbound_hosts = ["https://univsalud.online", "https://simposiorevsalud.univsalud.online"]
+[component.simposiorevsalud.build]
+command = "cargo build --target wasm32-wasip1 --release"
+watch = ["src/**/*.rs", "Cargo.toml"]
+
+[component.ui]
+source = { url = "https://github.com/fermyon/spin-fileserver/releases/download/v0.3.0/spin_static_fs.wasm", digest = "sha256:ef88708817e107bf49985c7cefe4dd1f199bf26f6727819183d5c996baa3d148" }
+files = [
+  { source = "assets", destination = "/" },
+]

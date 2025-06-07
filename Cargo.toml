@@ -1,0 +1,23 @@
+[package]
+name = "simposiorevsalud"
+authors = ["alejo-c <4lejo.castrillon@gmail.com>"]
+description = ""
+version = "0.1.0"
+rust-version = "1.78"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1"
+spin-sdk = "3.1.0"
+serde = "1.0.219"
+serde_json = "1.0.140"
+jsonwebtoken = "9.3.1"
+time = "0.3.41"
+uuid = { version = "1.17.0", features = ["v4"] }
+cookie = "0.18.1"
+lettre = { version = "0.11.17", features = ["smtp-transport", "pool", "hostname", "builder"]}
+
+[workspace]
