@@ -190,7 +190,7 @@ pub fn user_register(req: Request, _params: Params) -> Result<impl IntoResponse>
 
     db::insert_user(user)?;
 
-    match email::send_quick_html_email(&register_data.email, "Usuario registrado todo()!", html!)
+    match email::send_quick_html_email(&register_data.email, "Usuario registrado todo()!", todo!())
     {
         core::result::Result::Ok(_) => Ok(Response::new(201, "User regsitered successfully")),
         Err(e) => Ok(Response::new(400, format!("Error: {}", e))),
