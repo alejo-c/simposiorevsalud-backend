@@ -1,19 +1,19 @@
 spin_manifest_version = 2
 
 [application]
-name = "simposiorevsalud-backend"
+name = "simposiorevsalud"
 version = "0.1.0"
 authors = ["alejo-c <4lejo.castrillon@gmail.com>"]
 description = ""
 
 [[trigger.http]]
-route = "/api/..."
+route = "/..."
 component = "simposiorevsalud-backend"
 
 [component.simposiorevsalud-backend]
 sqlite_databases = ["default"]
 source = "target/wasm32-wasip1/release/simposiorevsalud_backend.wasm"
-allowed_outbound_hosts = ["https://api.simposiorevsalud.univsalud.online"]
+allowed_outbound_hosts = ["https://simposiorevsalud.univsalud.online","https://apisimposiorevsalud.univsalud.online" ,"https://api.emailjs.com"]
 [component.simposiorevsalud-backend.build]
 command = "cargo build --target wasm32-wasip1 --release"
 watch = ["src/**/*.rs", "Cargo.toml"]

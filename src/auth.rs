@@ -8,7 +8,7 @@ pub enum Role {
     Webmaster,
     Staff,
     Attendee,
-    Speaker { hours: u8 },
+    Speaker { presentation: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -72,7 +72,7 @@ impl User {
 
     pub fn from_row(row: &Row) -> Result<Self, Box<dyn Error>> {
         let role = row.get::<&str>("role").unwrap();
-        let hours = row.get::<u8>("hours").unwrap();
+        let presentation = row.get::<&str>("presentation").unwrap();
         let attendance = row.get::<&str>("attendance").unwrap();
 
         Ok(User {
@@ -81,7 +81,7 @@ impl User {
             identification: extract_field(row, "identification"),
             full_name: extract_field(row, "full_name"),
             password: extract_field(row, "password"),
-            role: text_to_role(role, hours)?,
+            role: text_to_role(role, presentation.to_string())?,
             attendance: text_to_attendance(attendance)?,
             cert_generated: CerticatesGeneration::from(
                 row.get::<bool>("horiz_cert_generated").unwrap(),
@@ -106,22 +106,22 @@ impl User {
     }
 }
 
-pub fn role_to_text(role: Role) -> (String, u8) {
+pub fn role_to_text(role: Role) -> (String, String) {
     match role {
-        Role::Webmaster => ("webmaster".to_owned(), 0),
-        Role::Staff => ("staff".to_owned(), 0),
-        Role::Speaker { hours } => ("speaker".to_owned(), hours),
-        _ => ("attendance".to_owned(), 0),
+        Role::Webmaster => ("webmaster".to_owned(), String::new()),
+        Role::Staff => ("staff".to_owned(), String::new()),
+        Role::Speaker { presentation } => ("speaker".to_owned(), presentation),
+        _ => ("attendance".to_owned(), String::new()),
     }
 }
 
-pub fn text_to_role(role: &str, hours: u8) -> Result<Role, &'static str> {
+pub fn text_to_role(role: &str, presentation: String) -> Result<Role, &'static str> {
+    println!("Role: {}", role);
     match role {
         "webmaster" => Ok(Role::Webmaster),
         "staff" => Ok(Role::Staff),
-        "speaker" => Ok(Role::Speaker { hours }),
-        "attendee" => Ok(Role::Attendee),
-        _ => Err("Invalid role"),
+        "speaker" => Ok(Role::Speaker { presentation }),
+        _ => Ok(Role::Attendee),
     }
 }
 
@@ -136,7 +136,7 @@ pub fn text_to_attendance(attendance: &str) -> Result<Attendance, &'static str> 
     match attendance {
         "presential" => Ok(Attendance::Presential),
         "remote" => Ok(Attendance::Remote),
-        _ => Err("Invalid role"),
+        _ => Err("Invalid attendance"),
     }
 }
 

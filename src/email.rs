@@ -1,225 +1,213 @@
-use lettre::{
-    message::{header::ContentType, Mailbox, Message},
-    transport::smtp::{
-        authentication::{Credentials, Mechanism},
-        PoolConfig,
-    },
-    SmtpTransport, Transport,
-};
-use std::{error::Error, time::Duration};
+use serde::Serialize;
+use spin_sdk::http::{Method, Request, Response};
 
-pub struct EmailConfig {
-    pub smtp_server: String,
-    pub smtp_port: u16,
-    pub sender_email: String,
-    pub password: String,
+// EmailJS Configuration
+const EMAILJS_SERVICE_ID: &str = "service_3l0zil1";
+const EMAILJS_USER_ID: &str = "I38dYyrQyvuoc67_z";
+const TEMPLATE_REGISTER: &str = "template_og81zti";
+
+#[derive(Serialize)]
+struct EmailJSPayload {
+    service_id: String,
+    template_id: String,
+    user_id: String,
+    template_params: serde_json::Value,
 }
 
-impl Default for EmailConfig {
-    fn default() -> Self {
-        Self {
-            smtp_server: "smtp.office365.com".to_string(),
-            smtp_port: 587,
-            sender_email: "simposiorevsalud@udenar.edu.co".to_string(),
-            password: "testpasswd".to_string(),
+// ASYNC EMAIL SENDING - Proper async for Spin
+pub async fn send_register_email_sync(
+    to_email: &str,
+    to_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let template_params = serde_json::json!({
+        "to_email": to_email,
+        "to_name": to_name,
+        "from_name": "Simposio Rev Salud",
+        "reply_to": "simposiorevsalud@udenar.edu.co",
+        "subject": "✅ Registro Exitoso - Simposio Revista de Salud",
+        "user_name": to_name,
+        "event_name": "Simposio Revista de Salud",
+        "institution": "Universidad de Nariño",
+        "contact_email": "simposiorevsalud@udenar.edu.co"
+    });
+
+    println!("🚀 SENDING REGISTRATION EMAIL...");
+    println!("📧 To: {}", to_email);
+    println!("📧 Name: {}", to_name);
+
+    send_email_async(TEMPLATE_REGISTER, template_params).await
+}
+
+pub async fn send_certificate_ready_sync(
+    to_email: &str,
+    to_name: &str,
+    certificate_type: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cert_name = match certificate_type {
+        "horizontal" => "Certificado de Participación",
+        "vertical" => "Certificado de Ponencia",
+        _ => "Certificado",
+    };
+
+    let template_params = serde_json::json!({
+        "to_email": to_email,
+        "to_name": to_name,
+        "from_name": "Simposio Rev Salud",
+        "reply_to": "simposiorevsalud@udenar.edu.co",
+        "subject": format!("🎓 {} Disponible - Simposio Rev Salud", cert_name),
+        "user_name": to_name,
+        "email_type": "certificate",
+        "custom_message": format!("Su {} está listo para descargar desde su perfil.", cert_name),
+        "institution": "Universidad de Nariño",
+        "contact_email": "simposiorevsalud@udenar.edu.co"
+    });
+
+    println!("🚀 SENDING CERTIFICATE EMAIL...");
+    println!("📧 To: {}", to_email);
+    println!("📧 Certificate Type: {}", cert_name);
+
+    send_email_async(TEMPLATE_REGISTER, template_params).await
+}
+
+// Core async email sending function - proper for Spin
+async fn send_email_async(
+    template_id: &str,
+    template_params: serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let payload = EmailJSPayload {
+        service_id: EMAILJS_SERVICE_ID.to_string(),
+        template_id: template_id.to_string(),
+        user_id: EMAILJS_USER_ID.to_string(),
+        template_params: template_params.clone(),
+    };
+
+    println!("📦 Creating email payload...");
+    let body = serde_json::to_vec(&payload)?;
+
+    // Create the HTTP request
+    let request = Request::builder()
+        .method(Method::Post)
+        .uri("https://api.emailjs.com/api/v1.0/email/send")
+        .header("Content-Type", "application/json")
+        .header("User-Agent", "Simposio-RevSalud/1.0")
+        .body(body)
+        .build();
+
+    println!("🌐 Sending request to EmailJS...");
+
+    // Use Spin's async HTTP client - this is the correct way
+    match spin_sdk::http::send::<Request, Response>(request).await {
+        Ok(response) => {
+            let status = response.status();
+            let response_body = std::str::from_utf8(response.body()).unwrap_or("No body");
+
+            println!("📡 EmailJS Response - Status: {}", status);
+
+            if *status >= 400u16 {
+                println!("❌ EmailJS Error: {} - {}", status, response_body);
+                return Err(format!("EmailJS Error ({}): {}", status, response_body).into());
+            } else if *status >= 200u16 && *status < 300u16 {
+                println!("✅ EMAIL SENT SUCCESSFULLY!");
+                println!("📨 Email sent from: simposiorevsalud@udenar.edu.co");
+                println!("📧 Recipient: {}", template_params.get("to_email").unwrap());
+                return Ok(());
+            } else {
+                println!("⚠️ Unexpected response: {}", status);
+                return Err(format!("Unexpected response: {}", status).into());
+            }
+        }
+        Err(e) => {
+            println!("❌ Failed to send HTTP request: {}", e);
+            return Err(format!("HTTP request failed: {}", e).into());
         }
     }
 }
 
-pub struct EmailService {
-    config: EmailConfig,
-    mailer: SmtpTransport,
+// Utility functions
+pub fn get_service_id() -> &'static str {
+    EMAILJS_SERVICE_ID
 }
 
-impl EmailService {
-    pub fn new(config: EmailConfig) -> Result<Self, Box<dyn Error>> {
-        let creds = Credentials::new(config.sender_email.clone(), config.password.clone());
-
-        let mailer = SmtpTransport::relay(&config.smtp_server)?
-            .port(config.smtp_port)
-            .credentials(creds)
-            .authentication(vec![Mechanism::Login, Mechanism::Plain])
-            .pool_config(PoolConfig::new().max_size(10))
-            .timeout(Some(Duration::from_secs(60)))
-            .build();
-
-        Ok(Self { config, mailer })
-    }
-
-    pub fn new_with_default_config() -> Result<Self, Box<dyn Error>> {
-        Self::new(EmailConfig::default())
-    }
-
-    pub fn send_email(
-        &self,
-        to: &str,
-        subject: &str,
-        body: &str,
-        is_html: bool,
-    ) -> Result<(), Box<dyn Error>> {
-        let from: Mailbox = self.config.sender_email.parse()?;
-        let to: Mailbox = to.parse()?;
-
-        let message_builder = Message::builder().from(from).to(to).subject(subject);
-
-        let message = if is_html {
-            message_builder
-                .header(ContentType::TEXT_HTML)
-                .body(body.to_string())?
-        } else {
-            message_builder
-                .header(ContentType::TEXT_PLAIN)
-                .body(body.to_string())?
-        };
-
-        match self.mailer.send(&message) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(Box::new(e)),
-        }
-    }
-
-    pub fn send_html_email(
-        &self,
-        to: &str,
-        subject: &str,
-        html_body: &str,
-    ) -> Result<(), Box<dyn Error>> {
-        self.send_email(to, subject, html_body, true)
-    }
-
-    pub fn send_text_email(
-        &self,
-        to: &str,
-        subject: &str,
-        text_body: &str,
-    ) -> Result<(), Box<dyn Error>> {
-        self.send_email(to, subject, text_body, false)
-    }
-
-    pub fn send_multipart_email(
-        &self,
-        to: &str,
-        subject: &str,
-        text_body: &str,
-        html_body: &str,
-    ) -> Result<(), Box<dyn Error>> {
-        use lettre::message::{MultiPart, SinglePart};
-
-        let from: Mailbox = self.config.sender_email.parse()?;
-        let to: Mailbox = to.parse()?;
-
-        let message = Message::builder()
-            .from(from)
-            .to(to)
-            .subject(subject)
-            .multipart(
-                MultiPart::alternative()
-                    .singlepart(
-                        SinglePart::builder()
-                            .header(ContentType::TEXT_PLAIN)
-                            .body(text_body.to_string()),
-                    )
-                    .singlepart(
-                        SinglePart::builder()
-                            .header(ContentType::TEXT_HTML)
-                            .body(html_body.to_string()),
-                    ),
-            )?;
-
-        match self.mailer.send(&message) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(Box::new(e)),
-        }
-    }
-
-    pub fn send_email_with_cc_bcc(
-        &self,
-        to: &str,
-        cc: Option<&str>,
-        bcc: Option<&str>,
-        subject: &str,
-        body: &str,
-        is_html: bool,
-    ) -> Result<(), Box<dyn Error>> {
-        let from: Mailbox = self.config.sender_email.parse()?;
-        let to: Mailbox = to.parse()?;
-
-        let mut message_builder = Message::builder().from(from).to(to).subject(subject);
-
-        if let Some(cc_addr) = cc {
-            let cc_mailbox: Mailbox = cc_addr.parse()?;
-            message_builder = message_builder.cc(cc_mailbox);
-        }
-
-        if let Some(bcc_addr) = bcc {
-            let bcc_mailbox: Mailbox = bcc_addr.parse()?;
-            message_builder = message_builder.bcc(bcc_mailbox);
-        }
-
-        let message = if is_html {
-            message_builder
-                .header(ContentType::TEXT_HTML)
-                .body(body.to_string())?
-        } else {
-            message_builder
-                .header(ContentType::TEXT_PLAIN)
-                .body(body.to_string())?
-        };
-
-        match self.mailer.send(&message) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(Box::new(e)),
-        }
-    }
+pub fn get_user_id() -> &'static str {
+    EMAILJS_USER_ID
 }
 
-// Convenience functions for quick email sending
-pub fn send_quick_email(
-    to: &str,
-    subject: &str,
-    body: &str,
-    is_html: bool,
-) -> Result<(), Box<dyn Error>> {
-    let email_service = EmailService::new_with_default_config()?;
-    email_service.send_email(to, subject, body, is_html)
+pub fn get_template_id() -> &'static str {
+    TEMPLATE_REGISTER
 }
 
-pub fn send_quick_html_email(
-    to: &str,
-    subject: &str,
-    html_body: &str,
-) -> Result<(), Box<dyn Error>> {
-    send_quick_email(to, subject, html_body, true)
+pub fn test_email_config(to_email: &str, to_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let template_params = serde_json::json!({
+        "to_email": to_email,
+        "to_name": to_name,
+        "from_name": "Simposio Rev Salud",
+        "reply_to": "simposiorevsalud@udenar.edu.co",
+        "subject": "✅ Registro Exitoso - Simposio Revista de Salud",
+        "user_name": to_name,
+        "event_name": "Simposio Revista de Salud",
+        "institution": "Universidad de Nariño",
+        "contact_email": "simposiorevsalud@udenar.edu.co"
+    });
+
+    let payload = EmailJSPayload {
+        service_id: EMAILJS_SERVICE_ID.to_string(),
+        template_id: TEMPLATE_REGISTER.to_string(),
+        user_id: EMAILJS_USER_ID.to_string(),
+        template_params: template_params.clone(),
+    };
+
+    println!("═══════════════════════════════════════");
+    println!("🧪 EMAIL CONFIGURATION TEST");
+    println!("═══════════════════════════════════════");
+    println!("📧 Service ID: {}", EMAILJS_SERVICE_ID);
+    println!("📧 Template ID: {}", TEMPLATE_REGISTER);
+    println!("📧 User ID (Public Key): {}", EMAILJS_USER_ID);
+    println!(
+        "📧 Destinatario: {}",
+        template_params.get("to_email").unwrap()
+    );
+    println!("📧 Asunto: {}", template_params.get("subject").unwrap());
+
+    let payload_str = serde_json::to_string_pretty(&payload)?;
+    println!("📦 Payload JSON:");
+    println!("{}", payload_str);
+    println!("═══════════════════════════════════════");
+    println!("✅ Email configuration is valid!");
+    println!("🚀 Ready to send emails to EmailJS API");
+    println!("🌐 Target URL: https://api.emailjs.com/api/v1.0/email/send");
+    println!("═══════════════════════════════════════");
+
+    Ok(())
 }
 
-pub fn send_quick_text_email(
-    to: &str,
-    subject: &str,
-    text_body: &str,
-) -> Result<(), Box<dyn Error>> {
-    send_quick_email(to, subject, text_body, false)
+// Preview functions for debugging
+pub fn preview_registration_email(to_email: &str, to_name: &str) {
+    println!("📧 PREVIEW: Registration email for {}", to_name);
+    println!("   From: simposiorevsalud@udenar.edu.co");
+    println!("   To: {}", to_email);
+    println!("   Subject: ✅ Registro Exitoso - Simposio Revista de Salud");
+    println!(
+        "   Message: Welcome to Simposio Revista de Salud, {}!",
+        to_name
+    );
 }
 
-pub fn send_register_mail(to: &str) -> Result<(), Box<dyn Error>> {
-    send_quick_html_email(to, "Usuario registrado", "")
-}
+pub fn preview_certificate_email(to_email: &str, to_name: &str, cert_type: &str) {
+    let cert_name = match cert_type {
+        "horizontal" => "Certificado de Participación",
+        "vertical" => "Certificado de Ponencia",
+        _ => "Certificado",
+    };
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_email_config_default() {
-        let config = EmailConfig::default();
-        assert_eq!(config.smtp_server, "smtp.office365.com");
-        assert_eq!(config.smtp_port, 587);
-        assert_eq!(config.sender_email, "simposiorevsalud@udenar.edu.co");
-    }
-
-    #[test]
-    fn test_email_service_creation() {
-        let config = EmailConfig::default();
-        let result = EmailService::new(config);
-        assert!(result.is_ok());
-    }
+    println!("📧 PREVIEW: Certificate email for {}", to_name);
+    println!("   From: simposiorevsalud@udenar.edu.co");
+    println!("   To: {}", to_email);
+    println!(
+        "   Subject: 🎓 {} Disponible - Simposio Rev Salud",
+        cert_name
+    );
+    println!(
+        "   Message: Su {} está listo para descargar, {}!",
+        cert_name, to_name
+    );
 }

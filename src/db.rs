@@ -37,7 +37,7 @@ pub fn revoke_token(token: &str, expires_at: OffsetDateTime, user_id: String) ->
 pub fn insert_user(user: User) -> Result<()> {
     let conn = open_connection()?;
 
-    let (role, hours) = role_to_text(user.role);
+    let (role, presentation) = role_to_text(user.role);
     let attendance = attendance_to_text(user.attendance);
 
     let params = [
@@ -47,12 +47,12 @@ pub fn insert_user(user: User) -> Result<()> {
         Value::Text(user.full_name),
         Value::Text(user.password),
         Value::Text(role),
-        Value::Integer(hours.into()),
+        Value::Text(presentation),
         Value::Text(attendance),
     ];
 
     conn.execute(
-        "INSERT INTO user (id, email, identification, full_name, password, role, hours, attendance)
+        "INSERT INTO user (id, email, identification, full_name, password, role, presentation, attendance)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         &params,
     )?;
@@ -60,23 +60,29 @@ pub fn insert_user(user: User) -> Result<()> {
     Ok(())
 }
 
-pub fn get_user_by_email(email: String) -> Result<User> {
+pub fn get_user_by_email(email: String) -> Result<Option<User>> {
     let conn = open_connection()?;
     let res = conn.execute("SELECT * FROM user WHERE email = ?", &[Value::Text(email)])?;
 
-    let row = &res.rows().next().unwrap();
-    Ok(User::from_row(row).unwrap())
+    let row = &res.rows().next();
+    match row {
+        Some(row) => Ok(Some(User::from_row(row).unwrap())),
+        None => Ok(None),
+    }
 }
 
-pub fn get_user_by_identification(identification: String) -> Result<User> {
+pub fn get_user_by_identification(identification: String) -> Result<Option<User>> {
     let conn = open_connection()?;
     let res = conn.execute(
         "SELECT * FROM user WHERE identification = ?",
         &[Value::Text(identification)],
     )?;
 
-    let row = &res.rows().next().unwrap();
-    Ok(User::from_row(row).unwrap())
+    let row = &res.rows().next();
+    match row {
+        Some(row) => Ok(Some(User::from_row(row).unwrap())),
+        None => Ok(None),
+    }
 }
 
 pub fn get_user_by_id(id: &str) -> Result<User> {
@@ -146,12 +152,12 @@ pub fn update_password(new_password: &String, user_id: &String) -> Result<()> {
     Ok(())
 }
 
-pub fn update_role(new_role: &String, new_hours: &u8, user_id: &String) -> Result<()> {
+pub fn update_role(new_role: &String, new_presentation: &String, user_id: &String) -> Result<()> {
     open_connection()?.execute(
         "UPDATE user SET role = ?, hours = ?  WHERE id = ?",
         &[
             Value::Text(new_role.to_owned()),
-            Value::Integer(new_hours.to_owned().into()),
+            Value::Text(new_presentation.to_owned()),
             Value::Text(user_id.to_owned()),
         ],
     )?;

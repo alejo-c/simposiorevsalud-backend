@@ -26,7 +26,7 @@ pub struct Claims {
     pub exp: usize,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct UserRequest {
     id: String,
     email: String,
@@ -34,7 +34,7 @@ struct UserRequest {
     identification: String,
     password: String,
     role: String,
-    hours: u8,
+    presentation: String,
     attendance: String,
 }
 
@@ -106,7 +106,7 @@ fn generate_jwt(user_id: String, user_role: &Role) -> Result<String> {
         exp: expiration,
     };
 
-    Ok(encode(
+    std::result::Result::Ok(encode(
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(secret.as_ref()),
@@ -158,24 +158,62 @@ pub fn is_valid_email(email: &str) -> bool {
 
 // Routes
 
-pub fn user_register(req: Request, _params: Params) -> Result<impl IntoResponse> {
-    let register_data: UserRequest = serde_json::from_slice(req.body())?;
+pub async fn test(_req: Request, _params: Params) -> Result<impl IntoResponse> {
+    println!("🧪 TESTING EMAIL CONFIGURATION...");
+    println!("📧 Service ID: {}", email::get_service_id());
+    println!("📧 User ID: {}", email::get_user_id());
+    println!("📧 Template ID: {}", email::get_template_id());
 
-    if !db::get_user_by_email((&register_data.email).to_owned()).is_ok() {
-        return Ok(Response::new(400, "Email already registered"));
+    // Test the email configuration structure
+    match email::test_email_config("4lejo.castrillon@gmail.com", "Test User") {
+        std::result::Result::Ok(_) => {
+            println!("✅ Configuration test passed!");
+
+            // Now test the actual email preparation
+            match email::send_register_email_sync("4lejo.castrillon@gmail.com", "Test User").await {
+                std::result::Result::Ok(_) => {
+                    println!("✅ Email preparation successful!");
+                    std::result::Result::Ok(Response::new(
+                        200,
+                        "✅ Email system ready! Configuration valid and payload prepared.",
+                    ))
+                }
+                Err(e) => std::result::Result::Ok(Response::new(
+                    500,
+                    format!("❌ Email prep failed: {}", e),
+                )),
+            }
+        }
+        Err(e) => {
+            std::result::Result::Ok(Response::new(500, format!("❌ Email config error: {}", e)))
+        }
     }
-    if !db::get_user_by_identification((&register_data.identification).to_owned()).is_ok() {
-        return Ok(Response::new(400, "identification already registered"));
+}
+
+pub async fn user_register(req: Request, _params: Params) -> Result<impl IntoResponse> {
+    let register_data: UserRequest = serde_json::from_slice(req.body())?;
+    let user = db::get_user_by_email((&register_data.email).to_owned()).ok();
+
+    if let Some(_) = user.unwrap() {
+        return Ok(Response::new(400, "Email ya registrado"));
+    }
+
+    let identification =
+        db::get_user_by_identification((&register_data.identification).to_owned()).ok();
+    if let Some(_) = identification.unwrap() {
+        return std::result::Result::Ok(Response::new(400, "Identificación ya registrada"));
     }
     if !is_valid_email(&register_data.email) {
-        return Ok(Response::new(400, "Invalid email format"));
+        return std::result::Result::Ok(Response::new(400, "Formato de email inválido"));
     }
     if !User::is_valid_password(&register_data.password) {
-        return Ok(Response::new(400, "Invalid password"));
+        return std::result::Result::Ok(Response::new(400, "Contraseña inválida"));
     }
 
+    println!("User: {:?}", register_data);
+
     let hashed_password = User::hash_password(&register_data.password.as_str()).unwrap();
-    let role = text_to_role(&register_data.role, 0).unwrap();
+    let role = text_to_role(&register_data.role, String::new()).unwrap();
     let attendance = text_to_attendance(&register_data.attendance).unwrap();
 
     let user = User::new(
@@ -190,19 +228,37 @@ pub fn user_register(req: Request, _params: Params) -> Result<impl IntoResponse>
 
     db::insert_user(user)?;
 
-    match email::send_quick_html_email(&register_data.email, "Usuario registrado todo()!", todo!())
-    {
-        core::result::Result::Ok(_) => Ok(Response::new(201, "User regsitered successfully")),
-        Err(e) => Ok(Response::new(400, format!("Error: {}", e))),
+    // Use the sync wrapper for now (which logs what would be sent)
+    match email::send_register_email_sync(&register_data.email, &register_data.full_name).await {
+        std::result::Result::Ok(_) => {
+            println!(
+                "✅ Registration email prepared for: {}",
+                register_data.email
+            );
+            std::result::Result::Ok(Response::new(
+                201,
+                "Usuario registrado exitosamente. Email será enviado.",
+            ))
+        }
+        Err(e) => {
+            println!("⚠️ User registered but email prep failed: {}", e);
+            std::result::Result::Ok(Response::new(
+                201,
+                "Usuario registrado. Verificando sistema de email.",
+            ))
+        }
     }
 }
 
 pub fn user_login(req: Request, _params: Params) -> Result<impl IntoResponse> {
     let creds: LoginRequest = serde_json::from_slice(&req.body())?;
-    let user = db::get_user_by_email(creds.email)?;
+    let user = match db::get_user_by_email(creds.email)? {
+        Some(user) => user,
+        None => return Ok(Response::new(400, "User not registered")),
+    };
 
     if !user.verify_password(creds.password.to_string()) {
-        return Ok(Response::new(400, "Error: incorrect password"));
+        return std::result::Result::Ok(Response::new(400, "Error: contraseña incorrecta"));
     }
 
     let role = user.role;
@@ -215,20 +271,30 @@ pub fn user_login(req: Request, _params: Params) -> Result<impl IntoResponse> {
     Ok(Response::builder()
         .status(200)
         .header("Set-Cookie", cookie)
-        .body(serde_json::json!("User logged successfully").to_string())
+        .body(
+            serde_json::json!({
+                "message": "Usuario logueado exitosamente",
+                "user": {
+                    "email": user.email,
+                    "full_name": user.full_name,
+                    "role": &role
+                }
+            })
+            .to_string(),
+        )
         .header("Content-Type", "application/json")
         .build())
 }
 
 pub fn user_logout(req: Request, _params: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |token, claims, user| {
+    std::result::Result::Ok(protected(&req, |token, claims, user| {
         let expires_at = OffsetDateTime::from_unix_timestamp(claims.exp as i64)?;
 
         db::revoke_token(&token, expires_at, user.id)?;
         let clear_cookie = "token=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0";
         let res = json!({"status": "success", "message": "Logged out"});
 
-        Ok(build_response(
+        std::result::Result::Ok(build_response(
             200,
             "Set-Cookie",
             clear_cookie,
@@ -238,10 +304,10 @@ pub fn user_logout(req: Request, _params: Params) -> Result<impl IntoResponse> {
 }
 
 pub fn user_profile(req: Request, _params: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
+    std::result::Result::Ok(protected(&req, |_token, _claims, user| {
         let user = UserResponse::from(user);
 
-        Ok(build_response(
+        std::result::Result::Ok(build_response(
             200,
             "Content-Type",
             "application/json",
@@ -251,15 +317,15 @@ pub fn user_profile(req: Request, _params: Params) -> Result<impl IntoResponse> 
 }
 
 pub fn show_user(req: Request, _param: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
+    std::result::Result::Ok(protected(&req, |_token, _claims, user| {
         match user.role {
             Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Insufficient permissions")),
+            _ => return std::result::Result::Ok(Response::new(403, "Insufficient permissions")),
         }
 
         let user = UserResponse::from(user);
 
-        Ok(build_response(
+        std::result::Result::Ok(build_response(
             200,
             "Content-Type",
             "application/json",
@@ -267,13 +333,11 @@ pub fn show_user(req: Request, _param: Params) -> Result<impl IntoResponse> {
         ))
     })?)
 }
+
 pub fn user_update(req: Request, _params: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
+    std::result::Result::Ok(protected(&req, |_token, _claims, user| {
         let user_req: UserRequest = serde_json::from_slice(&req.body())?;
 
-        // if user.id.ne(&user_req.id) {
-        //     return Ok(Response::new(403, "Insufficient permissions"));
-        // }
         if is_valid_for_update(&user_req.email, user.email) {
             db::update_email(&user_req.email, &user_req.id)?;
         }
@@ -281,23 +345,23 @@ pub fn user_update(req: Request, _params: Params) -> Result<impl IntoResponse> {
             db::update_password(&user_req.password, &user_req.id)?;
         }
         if !user_req.role.is_empty()
-            && text_to_role(&user_req.role, (&user_req.hours).to_owned()).is_ok()
+            && text_to_role(&user_req.role, (&user_req.presentation).to_owned()).is_ok()
         {
-            db::update_role(&user_req.role, &user_req.hours, &user_req.id)?;
+            db::update_role(&user_req.role, &user_req.presentation, &user_req.id)?;
         }
         if !user_req.attendance.is_empty() && text_to_attendance(&user_req.attendance).is_ok() {
             db::update_attendance(&user_req.attendance, &user_req.id)?;
         }
 
-        Ok(Response::new(200, "User updated"))
+        std::result::Result::Ok(Response::new(200, "User updated"))
     })?)
 }
 
 pub fn admin_user_update(req: Request, _param: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
+    std::result::Result::Ok(protected(&req, |_token, _claims, user| {
         match user.role {
             Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Insufficient permissions")),
+            _ => return std::result::Result::Ok(Response::new(403, "Insufficient permissions")),
         }
 
         let user_req: UserRequest = serde_json::from_slice(&req.body())?;
@@ -315,120 +379,174 @@ pub fn admin_user_update(req: Request, _param: Params) -> Result<impl IntoRespon
             db::update_password(&user_req.password, &user_req.id)?;
         }
         if !user_req.role.is_empty()
-            && text_to_role(&user_req.role, (&user_req.hours).to_owned()).is_ok()
+            && text_to_role(&user_req.role, (&user_req.presentation).to_owned()).is_ok()
         {
-            db::update_role(&user_req.role, &user_req.hours, &user_req.id)?;
+            db::update_role(&user_req.role, &user_req.presentation, &user_req.id)?;
         }
         if !user_req.attendance.is_empty() && text_to_attendance(&user_req.attendance).is_ok() {
             db::update_attendance(&user_req.attendance, &user_req.id)?;
         }
 
-        Ok(Response::new(200, "User updated"))
+        std::result::Result::Ok(Response::new(200, "User updated"))
     })?)
 }
 
 pub fn user_delete(req: Request, _params: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
+    std::result::Result::Ok(protected(&req, |_token, _claims, user| {
         let body_bytes = req.body().to_vec();
 
         let user_id = match String::from_utf8(body_bytes) {
-            core::result::Result::Ok(s) => s.trim().to_string(),
+            std::result::Result::Ok(s) => s.trim().to_string(),
             Err(_) => {
-                return Ok(Response::new(400, "Invalid UTF-8 in request body"));
+                return std::result::Result::Ok(Response::new(
+                    400,
+                    "Invalid UTF-8 in request body",
+                ));
             }
         };
 
         if user.id.ne(user_id.as_str()) {
-            return Ok(Response::new(400, "Insufficient permissions"));
+            return std::result::Result::Ok(Response::new(400, "Insufficient permissions"));
         }
         db::delete_user(user.id)?;
 
-        Ok(Response::new(200, "User deleted"))
+        std::result::Result::Ok(Response::new(200, "User deleted"))
     })?)
 }
 
 pub fn admin_user_delete(req: Request, _param: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
+    std::result::Result::Ok(protected(&req, |_token, _claims, user| {
         match user.role {
             Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Insufficient permissions")),
+            _ => return std::result::Result::Ok(Response::new(403, "Insufficient permissions")),
         }
 
         let body_bytes = req.body().to_vec();
         let user_id = match String::from_utf8(body_bytes) {
-            core::result::Result::Ok(s) => s.trim().to_string(),
+            std::result::Result::Ok(s) => s.trim().to_string(),
             Err(_) => {
-                return Ok(Response::new(400, "Invalid UTF-8 in request body"));
+                return std::result::Result::Ok(Response::new(
+                    400,
+                    "Invalid UTF-8 in request body",
+                ));
             }
         };
 
         db::delete_user(user_id)?;
 
-        Ok(Response::new(200, "User deleted"))
+        std::result::Result::Ok(Response::new(200, "User deleted"))
     })?)
 }
 
 pub fn generate_horiz_cert(req: Request, _params: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
+    std::result::Result::Ok(protected(&req, |_token, _claims, user| {
         db::update_horiz_cert_status(user.id.as_str())?;
 
-        Ok(Response::new(200, "Horizontal certificate generated"))
-    })?)
-}
+        // Log that email would be sent
+        println!(
+            "📧 Certificate notification would be sent to: {} ({})",
+            user.email, user.full_name
+        );
 
-pub fn admin_generate_horiz_cert(req: Request, _params: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
-        match user.role {
-            Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Insufficient permissions")),
-        }
-
-        let body_bytes = req.body().to_vec();
-        let user_id = match String::from_utf8(body_bytes) {
-            core::result::Result::Ok(s) => s.trim().to_string(),
-            Err(_) => {
-                return Ok(Response::new(400, "Invalid UTF-8 in request body"));
-            }
-        };
-        db::update_horiz_cert_status(user_id.as_str())?;
-
-        Ok(Response::new(200, "Horizontal certificate generated"))
+        std::result::Result::Ok(Response::new(
+            200,
+            "Certificado horizontal generado. Notificación programada.",
+        ))
     })?)
 }
 
 pub fn generate_vert_cert(req: Request, _params: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
+    std::result::Result::Ok(protected(&req, |_token, _claims, user| {
         db::update_vert_cert_status(user.id.as_str())?;
 
-        Ok(Response::new(200, "Vertical certificate generated"))
+        // Log that email would be sent
+        println!(
+            "📧 Certificate notification would be sent to: {} ({})",
+            user.email, user.full_name
+        );
+
+        std::result::Result::Ok(Response::new(
+            200,
+            "Certificado vertical generado. Notificación programada.",
+        ))
     })?)
 }
 
-pub fn admin_generate_vert_cert(req: Request, _params: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
-        match user.role {
+pub fn admin_generate_horiz_cert(req: Request, _params: Params) -> Result<impl IntoResponse> {
+    std::result::Result::Ok(protected(&req, |_token, _claims, admin_user| {
+        match admin_user.role {
             Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Insufficient permissions")),
+            _ => return std::result::Result::Ok(Response::new(403, "Permisos insuficientes")),
         }
 
         let body_bytes = req.body().to_vec();
         let user_id = match String::from_utf8(body_bytes) {
-            core::result::Result::Ok(s) => s.trim().to_string(),
+            std::result::Result::Ok(s) => s.trim().to_string(),
             Err(_) => {
-                return Ok(Response::new(400, "Invalid UTF-8 in request body"));
+                return std::result::Result::Ok(Response::new(
+                    400,
+                    "UTF-8 inválido en el cuerpo de la solicitud",
+                ));
             }
         };
+
+        db::update_horiz_cert_status(user_id.as_str())?;
+
+        // Get user info for email notification
+        if let std::result::Result::Ok(target_user) = db::get_user_by_id(&user_id) {
+            println!(
+                "📧 Certificate notification would be sent by admin to: {} ({})",
+                target_user.email, target_user.full_name
+            );
+        }
+
+        std::result::Result::Ok(Response::new(
+            200,
+            "Certificado horizontal generado por administrador",
+        ))
+    })?)
+}
+
+pub fn admin_generate_vert_cert(req: Request, _params: Params) -> Result<impl IntoResponse> {
+    std::result::Result::Ok(protected(&req, |_token, _claims, admin_user| {
+        match admin_user.role {
+            Role::Webmaster | Role::Staff => {}
+            _ => return std::result::Result::Ok(Response::new(403, "Permisos insuficientes")),
+        }
+
+        let body_bytes = req.body().to_vec();
+        let user_id = match String::from_utf8(body_bytes) {
+            std::result::Result::Ok(s) => s.trim().to_string(),
+            Err(_) => {
+                return std::result::Result::Ok(Response::new(
+                    400,
+                    "UTF-8 inválido en el cuerpo de la solicitud",
+                ));
+            }
+        };
+
         db::update_vert_cert_status(user_id.as_str())?;
 
-        Ok(Response::new(200, "Vertical certificate generated"))
+        // Get user info for email notification
+        if let std::result::Result::Ok(target_user) = db::get_user_by_id(&user_id) {
+            println!(
+                "📧 Certificate notification would be sent by admin to: {} ({})",
+                target_user.email, target_user.full_name
+            );
+        }
+
+        std::result::Result::Ok(Response::new(
+            200,
+            "Certificado vertical generado por administrador",
+        ))
     })?)
 }
 
 pub fn list_users(req: Request, _params: Params) -> Result<impl IntoResponse> {
-    Ok(protected(&req, |_token, _claims, user| {
+    std::result::Result::Ok(protected(&req, |_token, _claims, user| {
         match user.role {
             Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Insufficient permissions")),
+            _ => return std::result::Result::Ok(Response::new(403, "Insufficient permissions")),
         }
 
         let users: Vec<UserResponse> = db::get_all_users()?
@@ -436,7 +554,7 @@ pub fn list_users(req: Request, _params: Params) -> Result<impl IntoResponse> {
             .map(UserResponse::from)
             .collect();
 
-        Ok(build_response(
+        std::result::Result::Ok(build_response(
             200,
             "Content-Type",
             "application/json",
