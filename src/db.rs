@@ -1,8 +1,8 @@
 use anyhow::{Ok, Result};
 use spin_sdk::sqlite::{Connection, Error, Row, Value};
-use time::{format_description::well_known::Iso8601, OffsetDateTime, UtcDateTime};
+use time::{format_description::well_known::Iso8601, OffsetDateTime};
 
-use crate::auth::{attendance_to_text, role_to_text, User};
+use crate::types::{PendingRequest, Role, SimpleUserResponse, User};
 
 fn open_connection() -> Result<Connection, Error> {
     Connection::open_default()
@@ -37,8 +37,8 @@ pub fn revoke_token(token: &str, expires_at: OffsetDateTime, user_id: String) ->
 pub fn insert_user(user: User) -> Result<()> {
     let conn = open_connection()?;
 
-    let (role, presentation) = role_to_text(user.role);
-    let attendance = attendance_to_text(user.attendance);
+    let (role, presentation) = user.role.to_string();
+    let attendance = user.attendance.to_string();
 
     let params = [
         Value::Text(user.id),
@@ -215,22 +215,65 @@ pub fn list_logs() -> Result<Vec<(u8, String, String, String)>> {
     Ok(logs)
 }
 
-pub fn insert_log(email: String, operation: String) -> Result<()> {
-    let date_time = UtcDateTime::now().to_string();
-
+pub fn insert_pending_request(pending_request: PendingRequest) -> Result<()> {
     open_connection()?.execute(
-        "INSERT INTO log (user_id, operation, created_at) VALUES (?, ?, ?)",
+        "INSERT INTO pending_request (id, operation, user_id)",
         &[
-            Value::Text(email),
-            Value::Text(date_time),
-            Value::Text(operation),
+            Value::Text(pending_request.id),
+            Value::Text(pending_request.operation),
+            Value::Text(pending_request.user.id),
         ],
+    )?;
+
+    Ok(())
+}
+
+pub fn get_pending_requests() -> Result<Vec<PendingRequest>> {
+    let rowset = open_connection()?.execute("SELECT * from pending_request", &[])?;
+
+    let pending_requests: Vec<PendingRequest> = rowset
+        .rows()
+        .map(|row| {
+            let role = extract_field(&row, "user_role");
+            let presentation = extract_field(&row, "user_presentation");
+
+            let user = SimpleUserResponse {
+                id: extract_field(&row, "user_id"),
+                email: extract_field(&row, "user_email"),
+                identification: extract_field(&row, "user_identification"),
+                full_name: extract_field(&row, "full_name"),
+                role: Role::parse(role.as_str(), presentation).unwrap(),
+            };
+
+            PendingRequest {
+                id: extract_field(&row, "id"),
+                operation: extract_field(&row, "operation"),
+                user: user,
+                created_at: extract_field(&row, "created_at"),
+            }
+        })
+        .collect();
+
+    Ok(pending_requests)
+}
+
+pub fn delete_pending_request(pending_request_id: String) -> Result<()> {
+    open_connection()?.execute(
+        "DELETE pending_request WHERE id = ?",
+        &[Value::Text(pending_request_id)],
     )?;
     Ok(())
 }
 
-// Others
+pub fn insert_log(email: String, operation: String) -> Result<()> {
+    open_connection()?.execute(
+        "INSERT INTO log (user_id, operation) VALUES (?, ?)",
+        &[Value::Text(email), Value::Text(operation)],
+    )?;
 
-pub fn extract_field(row: &Row, name: &str) -> String {
+    Ok(())
+}
+
+fn extract_field(row: &Row, name: &str) -> String {
     row.get::<&str>(name).unwrap().to_string()
 }
