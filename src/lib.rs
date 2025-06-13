@@ -18,7 +18,7 @@ fn handle_simposiorevsalud(req: Request) -> Response {
     // Private routes
     router.put("/logout", api::logout_user);
 
-    router.post("/user/profile", api::get_user);
+    router.post("/user/profile", api::get_user_profile);
     router.put("/user/update", api::update_user);
     router.delete("/user/delete", api::delete_user);
 
@@ -26,7 +26,7 @@ fn handle_simposiorevsalud(req: Request) -> Response {
     router.put("/user/vert-cert", api::generate_vert_cert);
 
     router.post("/admin/users", api::list_users);
-    router.post("/admin/user", api::show_user);
+    router.post("/admin/user", api::admin_get_user);
     router.put("/admin/update", api::admin_update_user);
     router.put("/admin/horiz-cert", api::admin_generate_horiz_cert);
     router.put("/admin/horiz-cert", api::admin_generate_vert_cert);

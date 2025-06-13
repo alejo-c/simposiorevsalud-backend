@@ -21,4 +21,3 @@ cookie = "0.18.1"
 base64 = "0.22"
 urlencoding = "2.1"
 futures-task = "0.3.31"
-# futures = "0.3"  # Not needed for current approach

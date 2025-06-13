@@ -10,7 +10,6 @@ use spin_sdk::{
     variables,
 };
 use time::{Duration, OffsetDateTime};
-use uuid::Uuid;
 
 use crate::{
     db::{self},
@@ -39,13 +38,14 @@ fn extract_token_from_cookie(req: &Request) -> Result<String> {
         .ok_or(anyhow!("Token cookie not found"))
 }
 
-fn generate_jwt(user_id: String, user_role: &Role) -> Result<String> {
+// fn generate_jwt(user_id: String, user_role: &Role) -> Result<String> {
+fn generate_jwt(user_id: String) -> Result<String> {
     let expiration = (OffsetDateTime::now_utc() + Duration::hours(1)).unix_timestamp() as usize;
     let secret = variables::get("jwt").unwrap();
 
     let claims = Claims {
         sub: user_id,
-        role: user_role.to_owned(),
+        // role: user_role.to_owned(),
         exp: expiration,
     };
 
@@ -95,7 +95,6 @@ fn is_valid_for_update(new: &String, prev: String) -> bool {
 }
 
 pub fn is_valid_email(email: &str) -> bool {
-    // TODO: Add new email only constraint
     email.contains('@') && email.contains('.')
 }
 
@@ -121,19 +120,15 @@ pub fn register_user(req: Request, _params: Params) -> Result<impl IntoResponse>
         return Ok(Response::new(400, "Contraseña inválida"));
     }
 
-    println!("User: {:?}", register_data);
-
     let hashed_password = User::hash_password(&register_data.password.as_str()).unwrap();
-    let role = Role::parse(&register_data.role, String::new()).unwrap();
-    let attendance = Attendance::parse(&register_data.attendance).unwrap();
+    let attendance = Attendance::from(&register_data.attendance).unwrap();
 
     let user = User::new(
-        Uuid::new_v4().to_string(),
         register_data.email.to_string(),
         register_data.identification.to_string(),
         register_data.full_name.to_string(),
         hashed_password,
-        role,
+        register_data.roles,
         attendance,
     );
 
@@ -157,8 +152,9 @@ pub fn login_user(req: Request, _params: Params) -> Result<impl IntoResponse> {
         return Ok(Response::new(400, "Error: contraseña incorrecta"));
     }
 
-    let role = user.role;
-    let token = generate_jwt(user.id, &role)?;
+    let role = user.roles;
+    // let token = generate_jwt(user.id, &role)?;
+    let token = generate_jwt(user.id)?;
     let cookie = format!(
         "token={}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={}",
         token, 3600
@@ -201,18 +197,17 @@ pub fn logout_user(req: Request, _params: Params) -> Result<impl IntoResponse> {
 
         db::revoke_token(&token, expires_at, user.id)?;
         let clear_cookie = "token=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0";
-        let res = json!({"status": "success", "message": "Logged out"});
 
         Ok(build_response(
             200,
             "Set-Cookie",
             clear_cookie,
-            serde_json::to_vec(&res)?,
+            serde_json::to_vec(&json!({"status": 200, "message": "Logged out"}))?,
         ))
     })?)
 }
 
-pub fn get_user(req: Request, _params: Params) -> Result<impl IntoResponse> {
+pub fn get_user_profile(req: Request, _params: Params) -> Result<impl IntoResponse> {
     Ok(protected(&req, |_token, _claims, user| {
         let user = UserResponse::from(user);
 
@@ -225,15 +220,13 @@ pub fn get_user(req: Request, _params: Params) -> Result<impl IntoResponse> {
     })?)
 }
 
-pub fn show_user(req: Request, _param: Params) -> Result<impl IntoResponse> {
+pub fn admin_get_user(req: Request, _param: Params) -> Result<impl IntoResponse> {
     Ok(protected(&req, |_token, _claims, user| {
-        match user.role {
-            Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Insufficient permissions")),
+        if !user.roles.iter().any(|role| *role == Role::Staff) {
+            return Ok(Response::new(403, "Insufficient permissions"));
         }
 
         let user = UserResponse::from(user);
-
         Ok(build_response(
             200,
             "Content-Type",
@@ -253,12 +246,10 @@ pub fn update_user(req: Request, _params: Params) -> Result<impl IntoResponse> {
         if is_valid_for_update(&user_req.password, user.password) {
             db::update_password(&user_req.password, &user_req.id)?;
         }
-        if !user_req.role.is_empty()
-            && Role::parse(&user_req.role, (&user_req.presentation).to_owned()).is_ok()
-        {
-            db::update_role(&user_req.role, &user_req.presentation, &user_req.id)?;
+        if !user_req.roles.is_empty() {
+            db::update_roles((&user_req.roles).to_owned(), &user_req.id)?;
         }
-        if !user_req.attendance.is_empty() && Attendance::parse(&user_req.attendance).is_ok() {
+        if !user_req.attendance.is_empty() && Attendance::from(&user_req.attendance).is_ok() {
             db::update_attendance(&user_req.attendance, &user_req.id)?;
         }
 
@@ -268,9 +259,8 @@ pub fn update_user(req: Request, _params: Params) -> Result<impl IntoResponse> {
 
 pub fn admin_update_user(req: Request, _param: Params) -> Result<impl IntoResponse> {
     Ok(protected(&req, |_token, _claims, user| {
-        match user.role {
-            Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Insufficient permissions")),
+        if !user.roles.iter().any(|role| *role == Role::Staff) {
+            return Ok(Response::new(403, "Insufficient permissions"));
         }
 
         let user_req: UserRequest = serde_json::from_slice(&req.body())?;
@@ -287,12 +277,10 @@ pub fn admin_update_user(req: Request, _param: Params) -> Result<impl IntoRespon
         if is_valid_for_update(&user_req.password, user.password) {
             db::update_password(&user_req.password, &user_req.id)?;
         }
-        if !user_req.role.is_empty()
-            && Role::parse(&user_req.role, (&user_req.presentation).to_owned()).is_ok()
-        {
-            db::update_role(&user_req.role, &user_req.presentation, &user_req.id)?;
+        if !user_req.roles.is_empty() {
+            db::update_roles(user_req.roles, &user_req.id)?;
         }
-        if !user_req.attendance.is_empty() && Attendance::parse(&user_req.attendance).is_ok() {
+        if !user_req.attendance.is_empty() && Attendance::from(&user_req.attendance).is_ok() {
             db::update_attendance(&user_req.attendance, &user_req.id)?;
         }
 
@@ -322,9 +310,8 @@ pub fn delete_user(req: Request, _params: Params) -> Result<impl IntoResponse> {
 
 pub fn admin_delete_user(req: Request, _param: Params) -> Result<impl IntoResponse> {
     Ok(protected(&req, |_token, _claims, user| {
-        match user.role {
-            Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Insufficient permissions")),
+        if !user.roles.iter().any(|role| *role == Role::Staff) {
+            return Ok(Response::new(403, "Insufficient permissions"));
         }
 
         let body_bytes = req.body().to_vec();
@@ -376,9 +363,8 @@ pub fn generate_vert_cert(req: Request, _params: Params) -> Result<impl IntoResp
 
 pub fn admin_generate_horiz_cert(req: Request, _params: Params) -> Result<impl IntoResponse> {
     Ok(protected(&req, |_token, _claims, admin_user| {
-        match admin_user.role {
-            Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Permisos insuficientes")),
+        if !admin_user.roles.iter().any(|role| *role == Role::Staff) {
+            return Ok(Response::new(403, "Insufficient permissions"));
         }
 
         let body_bytes = req.body().to_vec();
@@ -411,9 +397,8 @@ pub fn admin_generate_horiz_cert(req: Request, _params: Params) -> Result<impl I
 
 pub fn admin_generate_vert_cert(req: Request, _params: Params) -> Result<impl IntoResponse> {
     Ok(protected(&req, |_token, _claims, admin_user| {
-        match admin_user.role {
-            Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Permisos insuficientes")),
+        if !admin_user.roles.iter().any(|role| *role == Role::Staff) {
+            return Ok(Response::new(403, "Insufficient permissions"));
         }
 
         let body_bytes = req.body().to_vec();
@@ -446,9 +431,8 @@ pub fn admin_generate_vert_cert(req: Request, _params: Params) -> Result<impl In
 
 pub fn list_users(req: Request, _params: Params) -> Result<impl IntoResponse> {
     Ok(protected(&req, |_token, _claims, user| {
-        match user.role {
-            Role::Webmaster | Role::Staff => {}
-            _ => return Ok(Response::new(403, "Insufficient permissions")),
+        if !user.roles.iter().any(|role| *role == Role::Staff) {
+            return Ok(Response::new(403, "Insufficient permissions"));
         }
 
         let users: Vec<UserResponse> = db::get_all_users()?
@@ -487,5 +471,5 @@ pub fn delete_pending_request(req: Request, _params: Params) -> Result<impl Into
     };
 
     db::delete_pending_request(pending_request_id)?;
-    Ok(Response::new(200, "User deleted"))
+    Ok(Response::new(200, "Pending request deleted successfully"))
 }

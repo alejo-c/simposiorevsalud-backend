@@ -2,7 +2,9 @@ use anyhow::{Ok, Result};
 use spin_sdk::sqlite::{Connection, Error, Row, Value};
 use time::{format_description::well_known::Iso8601, OffsetDateTime};
 
-use crate::types::{PendingRequest, Role, SimpleUserResponse, User};
+use crate::types::{
+    Attendance, CerticatesGeneration, PendingRequest, Role, SimpleUserResponse, User,
+};
 
 fn open_connection() -> Result<Connection, Error> {
     Connection::open_default()
@@ -34,39 +36,99 @@ pub fn revoke_token(token: &str, expires_at: OffsetDateTime, user_id: String) ->
     Ok(())
 }
 
-pub fn insert_user(user: User) -> Result<()> {
-    let conn = open_connection()?;
+fn insert_role(role: Role, user_id: String) -> Result<()> {
+    let (role_name, presentation) = role.extract();
 
-    let (role, presentation) = user.role.to_string();
-    let attendance = user.attendance.to_string();
-
-    let params = [
-        Value::Text(user.id),
-        Value::Text(user.email),
-        Value::Text(user.identification),
-        Value::Text(user.full_name),
-        Value::Text(user.password),
-        Value::Text(role),
-        Value::Text(presentation),
-        Value::Text(attendance),
-    ];
-
-    conn.execute(
-        "INSERT INTO user (id, email, identification, full_name, password, role, presentation, attendance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        &params,
+    open_connection()?.execute(
+        "INSERT INTO user_role (user_id, role, presentation) VALUES(?, ?, ?)",
+        &[
+            Value::Text(user_id),
+            Value::Text(role_name),
+            Value::Text(presentation),
+        ],
     )?;
 
     Ok(())
 }
 
-pub fn get_user_by_email(email: String) -> Result<Option<User>> {
+pub fn insert_user(user: User) -> Result<()> {
     let conn = open_connection()?;
-    let res = conn.execute("SELECT * FROM user WHERE email = ?", &[Value::Text(email)])?;
+    let attendance = user.attendance.to_string();
+
+    let params = [
+        Value::Text(user.id.clone()),
+        Value::Text(user.email.clone()),
+        Value::Text(user.identification.clone()),
+        Value::Text(user.full_name.clone()),
+        Value::Text(user.password.clone()),
+        Value::Text(attendance),
+    ];
+
+    conn.execute(
+        "INSERT INTO user (id, email, identification, full_name, password, attendance)
+        VALUES (?, ?, ?, ?, ?, ?)",
+        &params,
+    )?;
+
+    for role in user.roles.clone().into_iter() {
+        insert_role(role.to_owned(), user.id.clone())?;
+    }
+
+    insert_pending_request(PendingRequest::new(
+        String::from("User register"),
+        user,
+    ))?;
+    Ok(())
+}
+
+pub fn extract_user(row: &Row) -> Result<User> {
+    let attendance = row.get::<&str>("attendance").unwrap();
+    let user_id = extract_field(row, "id");
+    let roles = get_user_roles((&user_id).to_owned())?;
+
+    Ok(User {
+        id: user_id,
+        email: extract_field(row, "email"),
+        identification: extract_field(row, "identification"),
+        full_name: extract_field(row, "full_name"),
+        password: extract_field(row, "password"),
+        roles: roles,
+        attendance: Attendance::from(attendance).ok().unwrap(),
+        cert_generated: CerticatesGeneration::from(
+            row.get::<bool>("horiz_cert_generated").unwrap(),
+            row.get::<bool>("vert_cert_generated").unwrap(),
+        ),
+    })
+}
+
+pub fn get_user_roles(user_id: String) -> Result<Vec<Role>> {
+    let rowset = open_connection()?.execute(
+        "SELECT * FROM user_role WHERE user_id = ?",
+        &[Value::Text(user_id)],
+    )?;
+
+    let roles: Vec<Role> = rowset
+        .rows()
+        .map(|row| {
+            let role = extract_field(&row, "role");
+            let presentation = extract_field(&row, "presentation");
+            Role::from(role.as_str(), presentation).ok().unwrap()
+        })
+        .collect();
+
+    Ok(roles)
+}
+
+pub fn get_user_by_email(email: String) -> Result<Option<User>> {
+    let res =
+        open_connection()?.execute("SELECT * FROM user WHERE email = ?", &[Value::Text(email)])?;
 
     let row = &res.rows().next();
     match row {
-        Some(row) => Ok(Some(User::from_row(row).unwrap())),
+        Some(row) => {
+            let user = extract_user(row).unwrap();
+            Ok(Some(user))
+        }
         None => Ok(None),
     }
 }
@@ -80,7 +142,7 @@ pub fn get_user_by_identification(identification: String) -> Result<Option<User>
 
     let row = &res.rows().next();
     match row {
-        Some(row) => Ok(Some(User::from_row(row).unwrap())),
+        Some(row) => Ok(Some(extract_user(row).unwrap())),
         None => Ok(None),
     }
 }
@@ -94,7 +156,7 @@ pub fn get_user_by_id(id: &str) -> Result<User> {
     )?;
 
     let row = &res.rows().next().unwrap();
-    Ok(User::from_row(row).unwrap())
+    Ok(extract_user(row).unwrap())
 }
 
 pub fn get_all_users() -> Result<Vec<User>> {
@@ -103,7 +165,7 @@ pub fn get_all_users() -> Result<Vec<User>> {
 
     let users = rowset
         .rows()
-        .map(|row| User::from_row(&row).unwrap())
+        .map(|row| extract_user(&row).unwrap())
         .collect();
     Ok(users)
 }
@@ -152,15 +214,28 @@ pub fn update_password(new_password: &String, user_id: &String) -> Result<()> {
     Ok(())
 }
 
-pub fn update_role(new_role: &String, new_presentation: &String, user_id: &String) -> Result<()> {
-    open_connection()?.execute(
-        "UPDATE user SET role = ?, hours = ?  WHERE id = ?",
-        &[
-            Value::Text(new_role.to_owned()),
-            Value::Text(new_presentation.to_owned()),
-            Value::Text(user_id.to_owned()),
-        ],
-    )?;
+pub fn update_roles(new_roles: Vec<Role>, user_id: &String) -> Result<()> {
+    let conn = open_connection()?;
+    let user = get_user_by_id(user_id)?;
+
+    for role in new_roles.into_iter() {
+        let (role_name, presentation) = role.extract();
+        if user.roles.contains(&role) {
+            conn.execute(
+                "INSERT INTO user_role(user_id, role, presentation) VALUES (?, ?, ?)",
+                &[
+                    Value::Text(user_id.to_owned()),
+                    Value::Text(role_name),
+                    Value::Text(presentation),
+                ],
+            )?;
+        } else {
+            conn.execute(
+                "DELETE FROM user_role WHERE user_id = ? role = ?",
+                &[Value::Text(user_id.to_owned()), Value::Text(role_name)],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -234,22 +309,20 @@ pub fn get_pending_requests() -> Result<Vec<PendingRequest>> {
     let pending_requests: Vec<PendingRequest> = rowset
         .rows()
         .map(|row| {
-            let role = extract_field(&row, "user_role");
-            let presentation = extract_field(&row, "user_presentation");
+            let user_id = extract_field(&row, "user_id");
 
             let user = SimpleUserResponse {
-                id: extract_field(&row, "user_id"),
+                id: (&user_id).to_owned(),
                 email: extract_field(&row, "user_email"),
                 identification: extract_field(&row, "user_identification"),
                 full_name: extract_field(&row, "full_name"),
-                role: Role::parse(role.as_str(), presentation).unwrap(),
+                roles: get_user_roles(user_id).ok().unwrap(),
             };
 
             PendingRequest {
                 id: extract_field(&row, "id"),
                 operation: extract_field(&row, "operation"),
                 user: user,
-                created_at: extract_field(&row, "created_at"),
             }
         })
         .collect();
